@@ -1,0 +1,14 @@
+# IDE 配置文件夹
+.idea/
+.vscode/
+.zcode/
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+
+# 本地备份文件
+*.bak

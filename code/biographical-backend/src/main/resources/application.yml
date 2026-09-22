@@ -1,0 +1,47 @@
+server:
+  port: 9090
+
+spring:
+  application:
+    name: springAi
+  ai:
+    openai:
+      # 这里使用的是阿里的千问模型，如果有需要修改为其他模型，请自行调整配置
+      base-url: https://dashscope.aliyuncs.com/compatible-mode
+      # 填写阿里百炼大模型平台申请的key（https://bailian.console.aliyun.com/?tab=model#/model-market）
+      api-key: sk-REPLACE_WITH_YOUR_DASHSCOPE_KEY
+      # 这个配置的是"对话模型"
+      chat:
+        options:
+          # 模型名称（这里用的是千问-Plus, 可以替换成自己想使用的）
+          model: qwen-plus
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/db_biograhpical?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: root
+    password: 1234
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+
+  mail:
+    host:
+    username:
+    password:
+    #   password: Y
+    default-encoding: UTF-8
+    protocol: smtp
+    port: 587
+    properties:
+      mail:
+        smtp:
+          ssl:
+            enable: true
+
+mybatis-plus:
+  type-aliases-package: com.shanzhu.biographical.model
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+logging:
+  level:
+    com.baomidou.mybatisplus: debug
