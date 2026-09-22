@@ -6,7 +6,7 @@ spring:
     name: springAi
   ai:
     openai:
-      # 这里使用的是阿里的千问模型，如果有需要修改为其他模型，请自行调整配置
+      # 这里使用的是阿里的千问模型如果有需要修改为其他模型，请自行调整配置
       base-url: https://dashscope.aliyuncs.com/compatible-mode
       # 填写阿里百炼大模型平台申请的key（https://bailian.console.aliyun.com/?tab=model#/model-market）
       api-key: sk-REPLACE_WITH_YOUR_DASHSCOPE_KEY
