@@ -9,6 +9,8 @@
         <el-button type="success" :loading="saving" @click="saveResume">更新简历</el-button>
         <el-button type="primary" @click="exportPdf">导出 PDF</el-button>
         <el-button @click="exportWord">导出 Word</el-button>
+        <el-button @click="exportJson">导出 JSON</el-button>
+        <el-button @click="importDialog.visible = true">导入 JSON</el-button>
       </div>
     </div>
 
@@ -48,8 +50,7 @@
           </el-radio-button>
         </el-radio-group>
 
-        <h3 class="panel-title">模块顺序 / 显隐</h3>
-        <div class="module-list">
+        <h3 class="panel-title">模块顺序 / 显隐</h3>        <div class="module-list">
           <div v-for="(key, index) in layout.order" :key="key" class="module-row">
             <el-checkbox
               :model-value="!layout.hidden.includes(key)"
@@ -66,6 +67,22 @@
           </div>
         </div>
         <p class="hint">箭头调整顺序，取消勾选后该模块不会出现在简历和导出文件里</p>
+
+        <h3 class="panel-title">AI 内容核对</h3>
+        <div v-if="aiRows.length" class="ai-check">
+          <p class="hint">
+            有 {{ aiRows.length }} 处内容是 AI 生成的，投递前请逐条核实（改过或确认无误后点「已核实」）
+          </p>
+          <div v-for="row in aiRows" :key="row.path" class="ai-row">
+            <div class="ai-row-head">
+              <span class="ai-row-label">{{ row.label }}</span>
+              <el-button link type="success" @click="verifyAiPath(row.path)">已核实</el-button>
+            </div>
+            <p class="ai-row-preview">{{ row.preview || '（暂无内容）' }}</p>
+          </div>
+          <el-button size="small" class="add-btn" @click="verifyAllAi">全部标记已核实</el-button>
+        </div>
+        <p v-else class="hint">当前没有待核实的 AI 内容</p>
       </aside>
 
       <!-- 中：内容编辑 -->
@@ -205,7 +222,7 @@
               <el-tag v-if="item.aiGenerated" size="small" type="warning" effect="plain">AI 参考</el-tag>
             </span>
             <div>
-              <el-button link type="primary" @click="polishDescription(item, '项目')">AI 润色</el-button>
+              <el-button link type="primary" @click="polishDescription('project', index)">AI 润色</el-button>
               <el-button v-if="item.aiGenerated" link type="success" @click="item.aiGenerated = false">
                 已核实
               </el-button>
@@ -242,7 +259,7 @@
           <div class="entry-head">
             <span>实习 {{ index + 1 }}</span>
             <div>
-              <el-button link type="primary" @click="polishDescription(item, '实习')">AI 润色</el-button>
+              <el-button link type="primary" @click="polishDescription('internship', index)">AI 润色</el-button>
               <el-button link type="danger" @click="resume.internship.splice(index, 1)">删除</el-button>
             </div>
           </div>
@@ -276,7 +293,7 @@
           <div class="entry-head">
             <span>工作 {{ index + 1 }}</span>
             <div>
-              <el-button link type="primary" @click="polishDescription(item, '工作')">AI 润色</el-button>
+              <el-button link type="primary" @click="polishDescription('work', index)">AI 润色</el-button>
               <el-button link type="danger" @click="resume.work.splice(index, 1)">删除</el-button>
             </div>
           </div>
@@ -363,6 +380,31 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 导入 JSON：支持选文件，也支持直接粘贴 -->
+    <el-dialog v-model="importDialog.visible" title="导入 JSON 简历数据" width="620px">
+      <p class="hint">
+        支持两种内容：本页「导出 JSON」得到的完整文件，或只有简历字段的裸 JSON。
+        导入会覆盖当前编辑区内容（不会自动保存到服务器，确认后点「更新简历」才会写库）。
+      </p>
+      <div class="import-row">
+        <input ref="fileInputRef" type="file" accept=".json,application/json" class="file-input" @change="onFilePicked" />
+        <el-button @click="fileInputRef?.click()">选择 JSON 文件</el-button>
+        <span v-if="importDialog.fileName" class="hint">{{ importDialog.fileName }}</span>
+      </div>
+      <el-input
+        v-model="importDialog.text"
+        type="textarea"
+        :rows="8"
+        placeholder="也可以把 JSON 内容粘贴到这里"
+      />
+      <template #footer>
+        <el-button @click="importDialog.visible = false">取消</el-button>
+        <el-button type="primary" :disabled="!importDialog.text.trim()" @click="applyImport(importDialog.text)">
+          导入并覆盖
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -390,6 +432,7 @@ import {
   loadLayout,
   normalizeResume,
   resumeToSections,
+  safeParse,
   saveLayout,
   textToSkills,
 } from '../utils/resume-model';
@@ -481,6 +524,7 @@ const polishEvaluation = () =>
     kind: 'evaluation',
     apply: (value) => {
       resume.value.selfEvaluation = value;
+      markAiPending('selfEvaluation');
     },
   });
 
@@ -490,6 +534,7 @@ const polishSummary = () =>
     kind: 'summary',
     apply: (value) => {
       resume.value.profession.summary = value;
+      markAiPending('summary');
     },
   });
 
@@ -499,18 +544,136 @@ const polishStrength = (index) =>
     kind: 'strength',
     apply: (value) => {
       resume.value.strengths[index] = value;
+      markAiPending('strengths');
     },
   });
 
-const polishDescription = (item, label) =>
+/** 润色某条经历描述（key: project / internship / work） */
+const polishDescription = (key, index) =>
   runPolish({
-    text: item.details,
+    text: resume.value[key][index]?.details,
     kind: 'description',
     apply: (value) => {
-      item.details = value;
-      ElMessage.success(`${label}描述已更新`);
+      resume.value[key][index].details = value;
+      markAiPending(`${key}.${index}.details`);
+      ElMessage.success(`${ENTRY_LABELS[key] || '经历'}描述已更新`);
     },
   });
+
+// ------------------------------------------------- AI 内容核对（事实台账）
+
+const ENTRY_LABELS = { project: '项目经历', internship: '实习经历', work: '工作经历' };
+
+/** 把待核实路径解析成可读行；条目被删掉的路径会自动忽略 */
+const aiRows = computed(() => {
+  const rows = [];
+  const seen = new Set();
+  const push = (path, label, preview) => {
+    if (seen.has(path)) return;
+    seen.add(path);
+    rows.push({ path, label, preview: (preview || '').slice(0, 70) });
+  };
+
+  (resume.value.aiMeta.pending || []).forEach((path) => {
+    if (path === 'selfEvaluation') {
+      push(path, '自我评价', resume.value.selfEvaluation);
+      return;
+    }
+    if (path === 'strengths') {
+      push(path, '个人优势', resume.value.strengths.join('；'));
+      return;
+    }
+    if (path === 'summary') {
+      push(path, '技能概述', resume.value.profession.summary);
+      return;
+    }
+    const matched = path.match(/^(project|internship|work)\.(\d+)(\.details)?$/);
+    if (!matched) return;
+    const entry = resume.value[matched[1]][Number(matched[2])];
+    if (!entry) return;
+    push(path, `${ENTRY_LABELS[matched[1]]} ${Number(matched[2]) + 1}${matched[3] ? ' · 描述' : '（AI 参考项目）'}`, entry.details || entry.name);
+  });
+
+  // AI 参考项目即使被从清单里移除，也要继续提醒（必须替换成真实经历）
+  resume.value.project.forEach((item, index) => {
+    if (item.aiGenerated) {
+      push(`project.${index}`, `项目经历 ${index + 1}（AI 参考项目）`, item.details);
+    }
+  });
+  return rows;
+});
+
+/** 记一笔：这块内容是 AI 写的，待核实 */
+const markAiPending = (path) => {
+  const pending = resume.value.aiMeta.pending || [];
+  if (!pending.includes(path)) {
+    resume.value.aiMeta = { pending: [...pending, path] };
+  }
+};
+
+const verifyAiPath = (path) => {
+  resume.value.aiMeta = {
+    pending: (resume.value.aiMeta.pending || []).filter((item) => item !== path),
+  };
+  const matched = path.match(/^project\.(\d+)$/);
+  if (matched) {
+    const item = resume.value.project[Number(matched[1])];
+    if (item) item.aiGenerated = false;
+  }
+};
+
+const verifyAllAi = () => {
+  [...aiRows.value].forEach((row) => verifyAiPath(row.path));
+  ElMessage.success('已全部标记为已核实');
+};
+
+// ------------------------------------------------- 导出 / 导入 JSON（源码级数据）
+const importDialog = ref({ visible: false, text: '', fileName: '' });
+const fileInputRef = ref(null);
+
+/** 导出完整简历 JSON：可再次导入，也可作迁移/备份 */
+const exportJson = () => {
+  const data = {
+    app: 'biographical-resume',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    resume: payload.value,
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+  saveAs(blob, `${resume.value.basicInfo.name || '我的'}-简历.json`);
+  ElMessage.success('JSON 已导出');
+};
+
+/** 导入：兼容带 meta 的导出文件与裸简历 JSON */
+const applyImport = (raw) => {
+  try {
+    const parsed = typeof raw === 'string' ? safeParse(raw) : raw;
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('不是合法的 JSON');
+    }
+    const source = parsed.resume && typeof parsed.resume === 'object' ? parsed.resume : parsed;
+    importDialog.value.visible = false;
+    importDialog.value.text = '';
+    importDialog.value.fileName = '';
+    resume.value = normalizeResume(source);
+    ElMessage.success('已导入，请检查内容后点「更新简历」保存');
+  } catch (error) {
+    ElMessage.error('导入失败：' + (error?.message || 'JSON 解析错误'));
+  }
+};
+
+const onFilePicked = (event) => {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  importDialog.value.fileName = file.name;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    importDialog.value.text = String(e.target.result || '');
+  };
+  reader.onerror = () => ElMessage.error('读取文件失败');
+  reader.readAsText(file, 'utf-8');
+  event.target.value = '';
+};
 
 // ------------------------------------------------------------ 数据加载
 
@@ -564,6 +727,7 @@ const payload = computed(() => ({
   award: resume.value.award,
   selfEvaluation: resume.value.selfEvaluation,
   strengths: resume.value.strengths,
+  aiMeta: resume.value.aiMeta,
 }));
 
 const saveResume = async () => {
@@ -781,6 +945,50 @@ onMounted(loadResume);
 .polish-text.polished {
   background: #f0f9eb;
   border: 1px solid #e1f3d8;
+}
+
+/* 导入 JSON */
+.import-row {  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+/* AI 内容核对面板 */
+.ai-check {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-row {
+  border: 1px solid #fde2c8;
+  background: #fffaf3;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.ai-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ai-row-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #b88230;
+}
+
+.ai-row-preview {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.file-input {
+  display: none;
 }
 
 /* 固定表单栏：基础信息手工录入，不参与 AI 生成 */

@@ -143,4 +143,42 @@ class ResumeTagExtractorTest {
         assertEquals("上海", extractor.scanCity("居住地：上海市"));
         assertEquals("", extractor.scanCity("熟悉 Java、MySQL"));
     }
+
+    @Test
+    void 技能别名应归一后再匹配() {
+        assertTrue(extractor.skillMatches("js", "JavaScript"), "js 应能匹配 JavaScript");
+        assertTrue(extractor.skillMatches("JavaScript", "js"), "反向也应命中");
+        assertTrue(extractor.skillMatches("k8s", "Kubernetes"));
+        assertTrue(extractor.skillMatches("springboot", "Spring Boot"));
+        assertTrue(extractor.skillMatches("vue3", "Vue"));
+        assertFalse(extractor.skillMatches("vue", "React"), "不同框架不应互相命中");
+    }
+
+    @Test
+    void JD技能应区分必备与加分() {
+        ResumeTagExtractor.JobSkills skills = extractor.parseJobSkills(
+                "1.Java\n2.MySQL\n加分项：Redis、Kafka");
+
+        assertEquals(List.of("Java", "MySQL"), skills.core());
+        assertEquals(List.of("Redis", "Kafka"), skills.plus());
+        // 兼容接口仍返回并集
+        assertEquals(List.of("Java", "MySQL", "Redis", "Kafka"), extractor.parseRequiredSkills(
+                "1.Java\n2.MySQL\n加分项：Redis、Kafka"));
+    }
+
+    @Test
+    void JD没有加分标记时全部算必备技能() {
+        ResumeTagExtractor.JobSkills skills = extractor.parseJobSkills("Java、MySQL、Redis");
+
+        assertEquals(List.of("Java", "MySQL", "Redis"), skills.core());
+        assertTrue(skills.plus().isEmpty());
+    }
+
+    @Test
+    void 加分标记出现在首行时不应丢掉核心技能() {
+        ResumeTagExtractor.JobSkills skills = extractor.parseJobSkills("加分项：Redis、Kafka");
+
+        assertEquals(List.of("Redis", "Kafka"), skills.core(), "全篇只写加分项时应视为核心技能");
+        assertTrue(skills.plus().isEmpty());
+    }
 }

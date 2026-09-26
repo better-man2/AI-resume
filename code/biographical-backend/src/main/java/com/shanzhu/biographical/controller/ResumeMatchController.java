@@ -130,38 +130,59 @@ public class ResumeMatchController {
                                          String jobTitle, String educationLevel, int userRank,
                                          double experienceYears, String city,
                                          Map<Integer, String> categoryNames) {
-        // 1. 技能命中（50 分）
-        List<String> required = tagExtractor.parseRequiredSkills(job.getRequiredSkills());
-        List<String> matched = new ArrayList<>();
-        List<String> missing = new ArrayList<>();
-        for (String requirement : required) {
-            boolean hit = false;
-            for (String skill : skills) {
-                if (tagExtractor.skillMatches(skill, requirement)) {
-                    hit = true;
-                    break;
-                }
-            }
-            if (hit) {
-                matched.add(requirement);
-            } else {
-                missing.add(requirement);
-            }
-        }
-        double skillScore = required.isEmpty() ? 25 : 50.0 * matched.size() / required.size();
-
+        // 1. 技能命中（50 分）：核心技能 40 + 加分技能 10
         List<String> matchReasons = new ArrayList<>();
         List<String> mismatchReasons = new ArrayList<>();
 
-        if (required.isEmpty()) {
+        ResumeTagExtractor.JobSkills jobSkills = tagExtractor.parseJobSkills(job.getRequiredSkills());
+        List<String> coreSkills = jobSkills.core();
+        List<String> plusSkills = jobSkills.plus();
+
+        List<String> coreMatched = matchSkills(coreSkills, skills);
+        List<String> coreMissing = subtract(coreSkills, coreMatched);
+        List<String> plusMatched = matchSkills(plusSkills, skills);
+        List<String> plusMissing = subtract(plusSkills, plusMatched);
+
+        List<String> matched = new ArrayList<>(coreMatched);
+        plusMatched.forEach(skill -> {
+            if (!matched.contains(skill)) {
+                matched.add(skill);
+            }
+        });
+        List<String> missing = new ArrayList<>(coreMissing);
+        plusMissing.forEach(skill -> {
+            if (!missing.contains(skill)) {
+                missing.add(skill);
+            }
+        });
+
+        double skillScore;
+        if (coreSkills.isEmpty() && plusSkills.isEmpty()) {
+            skillScore = 25;
             matchReasons.add("岗位未明确技能要求，按学历与经验综合匹配");
-        } else if (!matched.isEmpty()) {
-            matchReasons.add("命中技能 " + matched.size() + "/" + required.size() + "：" + String.join("、", matched));
         } else {
-            mismatchReasons.add("岗位所需技能（" + String.join("、", required) + "）与简历技能无重合");
+            double coreWeight = coreSkills.isEmpty() ? 0 : (plusSkills.isEmpty() ? 50 : 40);
+            double plusWeight = coreSkills.isEmpty() ? 50 : 10;
+            skillScore = coreWeight * ratio(coreMatched.size(), coreSkills.size())
+                    + plusWeight * ratio(plusMatched.size(), plusSkills.size());
         }
-        if (!missing.isEmpty()) {
-            mismatchReasons.add("缺少技能：" + String.join("、", missing));
+
+        if (!coreSkills.isEmpty() && !coreMatched.isEmpty()) {
+            matchReasons.add("命中核心技能 " + coreMatched.size() + "/" + coreSkills.size() + "："
+                    + String.join("、", coreMatched));
+        }
+        if (!plusSkills.isEmpty() && !plusMatched.isEmpty()) {
+            matchReasons.add("命中加分技能 " + plusMatched.size() + "/" + plusSkills.size() + "："
+                    + String.join("、", plusMatched));
+        }
+        if (!coreSkills.isEmpty() && coreMatched.isEmpty()) {
+            mismatchReasons.add("岗位核心技能（" + String.join("、", coreSkills) + "）与简历技能无重合");
+        }
+        if (!coreMissing.isEmpty()) {
+            mismatchReasons.add("缺少核心技能：" + String.join("、", coreMissing));
+        }
+        if (!plusMissing.isEmpty()) {
+            mismatchReasons.add("缺少加分技能：" + String.join("、", plusMissing));
         }
 
         // 2. 学历（15 分）
@@ -243,6 +264,18 @@ public class ResumeMatchController {
         int matchScore = (int) Math.round(Math.min(100,
                 skillScore + educationScore + experienceScore + locationScore + keywordScore));
 
+        // 建议补充的关键词：优先核心缺口，其次加分缺口（提示用户只补自己真的具备的）
+        List<String> suggestedKeywords = new ArrayList<>(coreMissing);
+        for (String skill : plusMissing) {
+            if (suggestedKeywords.size() >= 5) {
+                break;
+            }
+            suggestedKeywords.add(skill);
+        }
+        if (suggestedKeywords.size() > 5) {
+            suggestedKeywords = new ArrayList<>(suggestedKeywords.subList(0, 5));
+        }
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("id", job.getId());
         result.put("title", job.getTitle());
@@ -255,11 +288,60 @@ public class ResumeMatchController {
         result.put("description", job.getDescription());
         result.put("matchScore", matchScore);
         result.put("grade", grade(matchScore));
+        result.put("priority", priority(matchScore, coreMissing.size()));
         result.put("matchedTags", matched);
         result.put("missingTags", missing);
+        result.put("coreSkills", coreSkills);
+        result.put("coreMatchedTags", coreMatched);
+        result.put("coreMissingTags", coreMissing);
+        result.put("plusSkills", plusSkills);
+        result.put("plusMatchedTags", plusMatched);
+        result.put("plusMissingTags", plusMissing);
+        result.put("suggestedKeywords", suggestedKeywords);
         result.put("matchReasons", matchReasons);
         result.put("mismatchReasons", mismatchReasons);
         return result;
+    }
+
+    // -------------------------------------------------------------- 打分辅助
+
+    /** 用户技能命中 JD 技能的列表（保留 JD 侧的写法） */
+    private List<String> matchSkills(List<String> requiredSkills, List<String> userSkills) {
+        List<String> matched = new ArrayList<>();
+        for (String requirement : requiredSkills) {
+            for (String skill : userSkills) {
+                if (tagExtractor.skillMatches(skill, requirement)) {
+                    matched.add(requirement);
+                    break;
+                }
+            }
+        }
+        return matched;
+    }
+
+    private List<String> subtract(List<String> source, List<String> remove) {
+        List<String> result = new ArrayList<>();
+        for (String item : source) {
+            if (!remove.contains(item)) {
+                result.add(item);
+            }
+        }
+        return result;
+    }
+
+    private double ratio(int hit, int total) {
+        return total <= 0 ? 0 : (double) hit / total;
+    }
+
+    /** 投递优先级：高分且核心技能基本补齐 = 优先投递 */
+    private String priority(int score, int coreMissing) {
+        if (score >= 75 && coreMissing <= 1) {
+            return "优先投递";
+        }
+        if (score >= 60) {
+            return "可以一试";
+        }
+        return "先补差距";
     }
 
     // -------------------------------------------------------------- 汇总信息

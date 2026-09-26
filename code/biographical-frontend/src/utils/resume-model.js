@@ -191,6 +191,7 @@ export function emptyResume() {
     award: [],
     selfEvaluation: '',
     strengths: [],
+    aiMeta: { pending: [] },
     generatedAt: '',
   };
 }
@@ -262,8 +263,15 @@ function normalizeEntry(item, type) {
   };
 }
 
-function normalizeProfession(value) {
-  const profession = { skills: [], summary: '' };
+/** AI 生成内容溯源：{ pending: ["selfEvaluation", "project.0.details", ...] } */
+export function normalizeAiMeta(value) {
+  if (!value || typeof value !== 'object' || !Array.isArray(value.pending)) {
+    return { pending: [] };
+  }
+  return { pending: value.pending.map((item) => text(item)).filter(Boolean) };
+}
+
+function normalizeProfession(value) {  const profession = { skills: [], summary: '' };
   if (!value) return profession;
   if (typeof value === 'string') {
     profession.skills = textToSkills(value);
@@ -304,6 +312,7 @@ function normalizeBasicInfo(source) {
   resume.salaryExpectation = text(source.salaryExpectation);
   resume.selfEvaluation = text(source.selfEvaluation);
   resume.strengths = toStringList(source.strengths);
+  resume.aiMeta = normalizeAiMeta(source.aiMeta);
   resume.generatedAt = text(source.generatedAt);
   resume.template = TEMPLATES.some((item) => item.key === source.template) ? source.template : 'classic';
   resume.education = toEntries(source.education, 'education');

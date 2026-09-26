@@ -5,6 +5,7 @@ import com.shanzhu.biographical.model.User;
 import com.shanzhu.biographical.service.ResumeService;
 import com.shanzhu.biographical.service.UserService;
 import com.shanzhu.biographical.util.ResumeConverter;
+import com.shanzhu.biographical.util.ResumeJsonUtils;
 import jakarta.annotation.Resource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -76,6 +77,7 @@ public class ResumeApplyController {
 
             Map<String, Object> applied = new LinkedHashMap<>();
             List<String> messages = new ArrayList<>();
+            List<String> aiPending = existingPending(current);
 
             // 1. 自我评价（描述类，允许覆盖，覆盖时在提示里说明）
             String evaluation = text(aiContent.get("self_evaluation"));
@@ -86,6 +88,7 @@ public class ResumeApplyController {
                 boolean overwritten = !text(current.get("selfEvaluation")).isEmpty();
                 current.put("selfEvaluation", evaluation);
                 applied.put("selfEvaluation", true);
+                addPending(aiPending, "selfEvaluation");
                 messages.add(overwritten ? "已更新自我评价（覆盖了原有内容）" : "已写入自我评价");
             }
 
@@ -96,21 +99,30 @@ public class ResumeApplyController {
                 profession.put("summary", summary);
                 current.put("profession", profession);
                 applied.put("professionSummary", true);
+                addPending(aiPending, "summary");
                 messages.add("已写入技能概述");
             }
 
             // 3. 各段经历描述：只填空缺，不覆盖已有描述
             for (String[] mapping : DETAIL_FIELDS) {
-                Map<String, Integer> counters = mergeDetails(current, mapping[0], aiContent, mapping[1]);
-                if (counters.get("filled") > 0) {
-                    messages.add("为 " + counters.get("filled") + " 条已有" + mapping[2] + "补充了描述");
+                Map<String, Object> counters = mergeDetails(current, mapping[0], aiContent, mapping[1]);
+                int filled = (int) counters.get("filled");
+                int added = (int) counters.get("added");
+                for (Integer index : toIntList(counters.get("filledIndexes"))) {
+                    addPending(aiPending, mapping[0] + "." + index + ".details");
                 }
-                if (counters.get("added") > 0) {
-                    messages.add("新增了 " + counters.get("added") + " 条" + mapping[2] + "描述，请到编辑页补全名称和时间");
+                for (Integer index : toIntList(counters.get("addedIndexes"))) {
+                    addPending(aiPending, mapping[0] + "." + index);
                 }
-                if (counters.get("filled") > 0 || counters.get("added") > 0) {
-                    applied.put(mapping[0] + "Filled", counters.get("filled"));
-                    applied.put(mapping[0] + "Added", counters.get("added"));
+                if (filled > 0) {
+                    messages.add("为 " + filled + " 条已有" + mapping[2] + "补充了描述");
+                }
+                if (added > 0) {
+                    messages.add("新增了 " + added + " 条" + mapping[2] + "描述，请到编辑页补全名称和时间");
+                }
+                if (filled > 0 || added > 0) {
+                    applied.put(mapping[0] + "Filled", filled);
+                    applied.put(mapping[0] + "Added", added);
                 }
             }
 
@@ -119,6 +131,8 @@ public class ResumeApplyController {
                 response.put("error", "AI 回复里没有可写入简历的描述内容");
                 return response;
             }
+
+            current.put("aiMeta", Map.of("pending", aiPending));
 
             Resume saved = resumeService.updateResume(userId, current);
             response.put("success", true);
@@ -135,10 +149,12 @@ public class ResumeApplyController {
     }
 
     /** 按顺序把 AI 描述并入经历数组：已有描述不动，描述为空则补上，条数不够就新增 */
-    private Map<String, Integer> mergeDetails(Map<String, Object> current, String currentKey,
-                                              Map<String, Object> aiContent, String aiKey) {
+    private Map<String, Object> mergeDetails(Map<String, Object> current, String currentKey,
+                                             Map<String, Object> aiContent, String aiKey) {
         int filled = 0;
         int added = 0;
+        List<Integer> filledIndexes = new ArrayList<>();
+        List<Integer> addedIndexes = new ArrayList<>();
         List<Map<String, Object>> entries = new ArrayList<>(asList(current.get(currentKey)));
         List<Map<String, Object>> aiEntries = asList(aiContent.get(aiKey));
 
@@ -153,12 +169,14 @@ public class ResumeApplyController {
                     entry.put("details", details);
                     entries.set(i, entry);
                     filled++;
+                    filledIndexes.add(i);
                 }
             } else {
                 Map<String, Object> entry = new LinkedHashMap<>();
                 entry.put("details", details);
                 entries.add(entry);
                 added++;
+                addedIndexes.add(entries.size() - 1);
             }
         }
 
@@ -166,10 +184,44 @@ public class ResumeApplyController {
             current.put(currentKey, entries);
         }
 
-        Map<String, Integer> counters = new LinkedHashMap<>();
+        Map<String, Object> counters = new LinkedHashMap<>();
         counters.put("filled", filled);
         counters.put("added", added);
+        counters.put("filledIndexes", filledIndexes);
+        counters.put("addedIndexes", addedIndexes);
         return counters;
+    }
+
+    /** 读取已有的待核实清单 */
+    private List<String> existingPending(Map<String, Object> resume) {
+        Object aiMeta = resume.get("aiMeta");
+        List<String> pending = new ArrayList<>();
+        if (aiMeta instanceof Map) {
+            for (String path : ResumeJsonUtils.asStringList(((Map<?, ?>) aiMeta).get("pending"))) {
+                if (!pending.contains(path)) {
+                    pending.add(path);
+                }
+            }
+        }
+        return pending;
+    }
+
+    private void addPending(List<String> pending, String path) {
+        if (!pending.contains(path)) {
+            pending.add(path);
+        }
+    }
+
+    private List<Integer> toIntList(Object value) {
+        List<Integer> list = new ArrayList<>();
+        if (value instanceof List) {
+            for (Object item : (List<?>) value) {
+                if (item instanceof Number) {
+                    list.add(((Number) item).intValue());
+                }
+            }
+        }
+        return list;
     }
 
     private Map<String, Object> emptyResumeMap(String userId) {

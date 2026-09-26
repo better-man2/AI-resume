@@ -83,6 +83,9 @@
             <div class="job-title">
               {{ job.title }}
               <el-tag :type="gradeType(job.matchScore)" size="small" effect="dark">{{ job.grade }}</el-tag>
+              <el-tag v-if="job.priority" :type="priorityType(job.priority)" size="small" effect="plain">
+                {{ job.priority }}
+              </el-tag>
             </div>
             <div class="job-company">
               {{ job.companyName || '未填写公司' }} · {{ job.salaryRange || '薪资面议' }}
@@ -105,22 +108,42 @@
 
         <div class="tag-block">
           <div class="tag-line">
-            <span class="tag-label">命中</span>
-            <el-tag v-for="tag in job.matchedTags" :key="tag" type="success" class="tag-item">{{ tag }}</el-tag>
-            <span v-if="!job.matchedTags.length" class="hint">无</span>
-          </div>
-          <div class="tag-line">
-            <span class="tag-label">缺失</span>
-            <el-tag v-for="tag in job.missingTags" :key="tag" type="danger" effect="plain" class="tag-item">
+            <span class="tag-label">核心命中</span>
+            <el-tag v-for="tag in job.coreMatchedTags || job.matchedTags" :key="tag" type="success" class="tag-item">
               {{ tag }}
             </el-tag>
-            <span v-if="!job.missingTags.length" class="hint">无</span>
+            <span v-if="!(job.coreMatchedTags || job.matchedTags || []).length" class="hint">无</span>
+          </div>
+          <div class="tag-line">
+            <span class="tag-label">核心缺失</span>
+            <el-tag v-for="tag in job.coreMissingTags || job.missingTags" :key="tag" type="danger" class="tag-item">
+              {{ tag }}
+            </el-tag>
+            <span v-if="!(job.coreMissingTags || job.missingTags || []).length" class="hint">无</span>
+          </div>
+          <div v-if="job.plusSkills && job.plusSkills.length" class="tag-line">
+            <span class="tag-label">加分技能</span>
+            <el-tag v-for="tag in job.plusMatchedTags" :key="tag" type="success" effect="plain" class="tag-item">
+              {{ tag }}
+            </el-tag>
+            <el-tag v-for="tag in job.plusMissingTags" :key="tag" type="danger" effect="plain" class="tag-item">
+              {{ tag }}
+            </el-tag>
+            <span class="hint">（浅色为未命中）</span>
           </div>
         </div>
 
         <div class="reasons">
           <p v-for="reason in job.matchReasons" :key="reason" class="reason-ok">✓ {{ reason }}</p>
           <p v-for="reason in job.mismatchReasons" :key="reason" class="reason-bad">✕ {{ reason }}</p>
+        </div>
+
+        <div v-if="job.suggestedKeywords && job.suggestedKeywords.length" class="suggest-row">
+          <span class="suggest-label">建议补充关键词</span>
+          <el-tag v-for="tag in job.suggestedKeywords" :key="tag" size="small" effect="plain" class="tag-item">
+            {{ tag }}
+          </el-tag>
+          <span class="hint">只补你确实具备的技能，不要写不会的</span>
         </div>
 
         <el-collapse v-if="job.description">
@@ -130,11 +153,22 @@
         </el-collapse>
 
         <div class="job-actions">
-          <el-tooltip content="求职进度管理属于 P1 阶段功能" placement="top">
-            <span>
-              <el-button type="primary" plain size="small" disabled>加入求职进度</el-button>
-            </span>
-          </el-tooltip>
+          <template v-if="job.addedApplication">
+            <el-button type="success" plain size="small" @click="router.push('/applications')">
+              已加入进度，去查看
+            </el-button>
+          </template>
+          <template v-else>
+            <el-button
+              type="primary"
+              plain
+              size="small"
+              :loading="addingId === job.id"
+              @click="addToApplication(job)"
+            >
+              加入求职进度
+            </el-button>
+          </template>
         </div>
       </el-card>
     </div>
@@ -182,6 +216,36 @@ const jobs = ref([]);
 
 const deepLoading = ref(false);
 const deepResult = ref(null);
+const addingId = ref(null);
+
+/** 把岗位加入求职进度（P1） */
+const addToApplication = async (job) => {
+  if (!userId) {
+    ElMessage.warning('请先登录');
+    return;
+  }
+  try {
+    addingId.value = job.id;
+    const { data } = await axios.post('/api/application/add', {
+      userId,
+      jobId: job.id,
+      jobTitle: job.title,
+      companyName: job.companyName,
+      salaryRange: job.salaryRange,
+      location: job.location,
+      matchScore: job.matchScore,
+    });
+    if (!data.success) {
+      throw new Error(data.error || '加入失败');
+    }
+    job.addedApplication = true;
+    ElMessage.success('已加入求职进度，可在顶部「求职进度」里跟踪状态');
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.error || error?.message || '加入失败');
+  } finally {
+    addingId.value = null;
+  }
+};
 
 const goBack = () => router.back();
 
@@ -195,6 +259,13 @@ const gradeType = (score) => {
   if (score >= 75) return 'success';
   if (score >= 60) return 'warning';
   return 'danger';
+};
+
+/** 投递优先级标签颜色 */
+const priorityType = (priority) => {
+  if (priority === '优先投递') return 'success';
+  if (priority === '可以一试') return 'warning';
+  return 'info';
 };
 
 /** 经验要求展示：纯数字补上"年"，已经带单位或写"不限"的原样显示 */
@@ -452,6 +523,24 @@ const runDeepAnalysis = async () => {
 
 .reason-bad {
   color: #c45656;
+}
+
+/* 建议补充关键词 */
+.suggest-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: #fdf6ec;
+  border-radius: 6px;
+}
+
+.suggest-label {
+  font-size: 13px;
+  color: #b88230;
+  font-weight: 600;
 }
 
 .jd {

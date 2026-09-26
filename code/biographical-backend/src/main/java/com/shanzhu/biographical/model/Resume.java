@@ -34,6 +34,11 @@ public class Resume {
     private String selfEvaluation;
     /** 个人优势（AI 生成的短句数组，JSON） */
     private String strengths;
+    /**
+     * AI 生成内容溯源：{"pending":["selfEvaluation","project.0.details"]}
+     * 记录哪些内容是 AI 写的、用户还没核实，用于编辑页的「AI 内容核对」面板。
+     */
+    private String aiMeta;
     private String project;
     private String award;
     /** 简历模板标识：classic/modern/campus */

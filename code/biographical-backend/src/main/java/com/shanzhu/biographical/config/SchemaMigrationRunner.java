@@ -34,10 +34,40 @@ public class SchemaMigrationRunner implements ApplicationRunner {
                     "ALTER TABLE `resume` ADD COLUMN `self_evaluation` text NULL COMMENT '自我评价(AI 生成的描述文本)'"},
             {"resume", "strengths",
                     "ALTER TABLE `resume` ADD COLUMN `strengths` text NULL COMMENT '个人优势(AI 生成的短句数组 JSON)'"},
+            {"resume", "ai_meta",
+                    "ALTER TABLE `resume` ADD COLUMN `ai_meta` text NULL COMMENT 'AI 生成内容溯源(JSON，pending 待核实路径)'"},
+    };
+
+    /** 需要确保存在的表（建表语句本身幂等） */
+    private static final String[] REQUIRED_TABLES = {
+            "CREATE TABLE IF NOT EXISTS `job_application` ("
+                    + "`id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键',"
+                    + "`user_id` varchar(32) NOT NULL COMMENT '用户ID',"
+                    + "`job_id` bigint DEFAULT NULL COMMENT '岗位库ID(可空)',"
+                    + "`job_title` varchar(100) NOT NULL COMMENT '岗位名称',"
+                    + "`company_name` varchar(100) DEFAULT NULL COMMENT '公司名称',"
+                    + "`salary_range` varchar(50) DEFAULT NULL COMMENT '薪资范围',"
+                    + "`location` varchar(100) DEFAULT NULL COMMENT '工作地点',"
+                    + "`match_score` int DEFAULT NULL COMMENT '加入时的匹配分',"
+                    + "`status` varchar(20) NOT NULL DEFAULT 'APPLIED' COMMENT '状态',"
+                    + "`interview_at` datetime DEFAULT NULL COMMENT '面试时间',"
+                    + "`remark` varchar(500) DEFAULT NULL COMMENT '备注',"
+                    + "`create_time` datetime NOT NULL COMMENT '加入时间',"
+                    + "`update_time` datetime NOT NULL COMMENT '更新时间',"
+                    + "PRIMARY KEY (`id`), KEY `idx_user` (`user_id`), KEY `idx_status` (`status`)"
+                    + ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='求职进度(投递/面试/offer)'",
     };
 
     @Override
     public void run(ApplicationArguments args) {
+        for (String ddl : REQUIRED_TABLES) {
+            try {
+                jdbcTemplate.execute(ddl);
+            } catch (Exception e) {
+                log.warn("[schema] 建表跳过：{}，如需手动执行请参考 数据库/migration_job_application.sql", e.getMessage());
+            }
+        }
+
         for (String[] column : REQUIRED_COLUMNS) {
             String table = column[0];
             String name = column[1];

@@ -544,12 +544,17 @@ const generate = async () => {
   startProgressAnimation();
 
   try {
-    const { data } = await axios.post('/api/resume/generate', {
-      userId,
-      username: localStorage.getItem('username'),
-      template: form.value.template,
-      form: buildGenerateForm(form.value),
-    });
+    const { data } = await axios.post(
+      '/api/resume/generate',
+      {
+        userId,
+        username: localStorage.getItem('username'),
+        template: form.value.template,
+        form: buildGenerateForm(form.value),
+      },
+      // 生成要调用大模型写多段描述，单独给更宽的超时
+      { timeout: 240000 },
+    );
 
     if (!data.success) {
       throw new Error(data.error || '生成失败');

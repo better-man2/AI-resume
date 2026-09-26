@@ -32,6 +32,7 @@ public class ResumeConverter {
         result.put("internship", readJson(resume.getInternship()));
         result.put("selfEvaluation", resume.getSelfEvaluation());
         result.put("strengths", readJson(resume.getStrengths()));
+        result.put("aiMeta", readJson(resume.getAiMeta()));
         result.put("project", readJson(resume.getProject()));
         result.put("award", readJson(resume.getAward()));
         result.put("template", resume.getTemplate());

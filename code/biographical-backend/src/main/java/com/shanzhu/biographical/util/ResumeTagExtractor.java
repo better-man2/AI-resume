@@ -51,6 +51,50 @@ public class ResumeTagExtractor {
             "财务报表", "会计核算", "招聘", "绩效考核", "员工关系", "薪酬管理", "劳动合同"
     );
 
+    /**
+     * 技能别名归一：把常见缩写/写法映射到统一名称，避免 "js" 对不上 "JavaScript"。
+     * key 为归一化后的写法（小写、去掉空格与分隔符）。
+     */
+    private static final Map<String, String> SKILL_ALIAS = Map.ofEntries(
+            Map.entry("js", "JavaScript"),
+            Map.entry("javascript", "JavaScript"),
+            Map.entry("es6", "JavaScript"),
+            Map.entry("ts", "TypeScript"),
+            Map.entry("typescript", "TypeScript"),
+            Map.entry("nodejs", "Node.js"),
+            Map.entry("node", "Node.js"),
+            Map.entry("springboot", "Spring Boot"),
+            Map.entry("springcloud", "Spring Cloud"),
+            Map.entry("springmvc", "Spring MVC"),
+            Map.entry("mybatisplus", "MyBatis-Plus"),
+            Map.entry("mariadb", "MySQL"),
+            Map.entry("postgres", "PostgreSQL"),
+            Map.entry("pg", "PostgreSQL"),
+            Map.entry("mssql", "SQL Server"),
+            Map.entry("sqlserver", "SQL Server"),
+            Map.entry("es", "Elasticsearch"),
+            Map.entry("k8s", "Kubernetes"),
+            Map.entry("kubernetes", "Kubernetes"),
+            Map.entry("mq", "消息队列"),
+            Map.entry("vuejs", "Vue"),
+            Map.entry("vue3", "Vue"),
+            Map.entry("reactjs", "React"),
+            Map.entry("wechatminiprogram", "小程序"),
+            Map.entry("miniprogram", "小程序"),
+            Map.entry("小程序开发", "小程序"),
+            Map.entry("html5", "HTML"),
+            Map.entry("css3", "CSS"),
+            Map.entry("cicd", "CI/CD"),
+            Map.entry("ml", "机器学习"),
+            Map.entry("机器学习算法", "机器学习"),
+            Map.entry("算法工程师", "算法"),
+            Map.entry("数据结构与算法", "数据结构"),
+            Map.entry("高并发场景", "高并发"),
+            Map.entry("分布式系统", "分布式"));
+
+    /** 判定"加分项"的关键词：命中后，该行及其之后的技能算加分技能 */
+    private static final List<String> PLUS_MARKERS = List.of("加分", "优先", "有则更佳", "锦上添花");
+
     /** 学历从低到高，用于比较 */
     private static final List<String> DEGREE_ORDER = List.of("不限", "高中", "中专", "大专", "本科", "硕士", "博士");
 
@@ -141,25 +185,83 @@ public class ResumeTagExtractor {
      * 解析 JD 里的所需技能：按换行/顿号/逗号切分，去掉 "1." "2、" 这类序号。
      */
     public List<String> parseRequiredSkills(String requiredSkills) {
-        List<String> result = new ArrayList<>();
-        for (String token : splitTokens(requiredSkills)) {
-            String cleaned = token.replaceAll("^\\s*\\d+\\s*[.、:：)）]\\s*", "").trim();
-            if (!cleaned.isEmpty()) {
-                result.add(cleaned);
+        JobSkills skills = parseJobSkills(requiredSkills);
+        List<String> all = new ArrayList<>(skills.core());
+        for (String plus : skills.plus()) {
+            if (!all.contains(plus)) {
+                all.add(plus);
             }
         }
-        return result;
+        return all;
     }
 
     /**
-     * 技能是否命中：忽略大小写和分隔符后相等，或一方是另一方的前缀且长度接近。
+     * 解析 JD 技能并区分「必备」与「加分」：
+     * <ul>
+     *   <li>文本里出现"加分/优先"等字样后，该行起算加分技能；</li>
+     *   <li>没有这种标记时，全部视为必备技能（不硬猜比例）。</li>
+     * </ul>
+     */
+    public JobSkills parseJobSkills(String requiredSkills) {
+        List<String> core = new ArrayList<>();
+        List<String> plus = new ArrayList<>();
+        if (requiredSkills == null || requiredSkills.trim().isEmpty()) {
+            return new JobSkills(core, plus);
+        }
+
+        boolean plusSection = false;
+        for (String line : requiredSkills.split("\\n")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            if (PLUS_MARKERS.stream().anyMatch(trimmed::contains)) {
+                plusSection = true;
+            }
+            // 同一行里可能既有序号又有"加分"标注，先去掉标记词再拆
+            String cleaned = trimmed;
+            for (String marker : PLUS_MARKERS) {
+                cleaned = cleaned.replace(marker + "项", "").replace(marker, "");
+            }
+            for (String marker : List.of("必备项", "必备", "必须", "硬性要求", "任职要求", "岗位要求")) {
+                cleaned = cleaned.replace(marker, "");
+            }
+            for (String token : splitTokens(cleaned)) {
+                // 去掉序号（1. / 2、）和残留的前导标点（：,，、）
+                String skill = token.replaceAll("^\\s*\\d+\\s*[.、:：)）]\\s*", "")
+                        .replaceAll("^[\\s:：,，、;；.\\-]+", "")
+                        .trim();
+                if (skill.isEmpty()) {
+                    continue;
+                }
+                if (plusSection && !plus.contains(skill)) {
+                    plus.add(skill);
+                } else if (!plusSection && !core.contains(skill)) {
+                    core.add(skill);
+                }
+            }
+        }
+        // 若"加分"标记在首行导致 core 为空，则把 plus 当作核心技能，避免权重错配
+        if (core.isEmpty() && !plus.isEmpty()) {
+            core.addAll(plus);
+            plus.clear();
+        }
+        return new JobSkills(core, plus);
+    }
+
+    /** JD 技能分组结果 */
+    public record JobSkills(List<String> core, List<String> plus) {
+    }
+
+    /**
+     * 技能是否命中：先做别名归一，再比较。
      * <p>
-     * 长度比例限制用于避免把不同技能判成同一个：Spring/Spring Boot 会命中，
+     * 归一后相等，或一方是另一方的前缀且长度接近：Spring/Spring Boot 会命中，
      * Java/JavaScript（长度比 0.4）不会命中。
      */
     public boolean skillMatches(String userSkill, String requiredSkill) {
-        String left = normalize(userSkill);
-        String right = normalize(requiredSkill);
+        String left = canonical(userSkill);
+        String right = canonical(requiredSkill);
         if (left.isEmpty() || right.isEmpty()) {
             return false;
         }
@@ -171,6 +273,16 @@ public class ResumeTagExtractor {
         return shorter.length() >= 3
                 && longer.startsWith(shorter)
                 && shorter.length() * 10 >= longer.length() * 6;
+    }
+
+    /**
+     * 归一化 + 别名映射，例如 "JS" / "js" / "JavaScript" -> "javascript"。
+     * 别名值也会再归一化一次，保证大小写与分隔符口径一致（否则 "Vue" 与 "vue3" 会比不上）。
+     */
+    public String canonical(String skill) {
+        String normalized = normalize(skill);
+        String alias = SKILL_ALIAS.getOrDefault(normalized, normalized);
+        return normalize(alias);
     }
 
     /** 学历等级序号，0 = 不限/未知 */

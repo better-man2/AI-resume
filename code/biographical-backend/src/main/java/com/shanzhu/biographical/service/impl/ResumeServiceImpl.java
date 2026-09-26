@@ -96,6 +96,10 @@ public class ResumeServiceImpl implements ResumeService {
             if (data.get("strengths") != null) {
                 resume.setStrengths(objectMapper.writeValueAsString(data.get("strengths")));
             }
+            // AI 内容溯源（待核实清单）
+            if (data.get("aiMeta") != null) {
+                resume.setAiMeta(objectMapper.writeValueAsString(data.get("aiMeta")));
+            }
             if (data.get("project") != null) {
                 resume.setProject(objectMapper.writeValueAsString(data.get("project")));
             }

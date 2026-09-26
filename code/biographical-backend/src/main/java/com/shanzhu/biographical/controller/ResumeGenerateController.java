@@ -104,6 +104,8 @@ public class ResumeGenerateController {
             Map<String, Object> content = mergeWithFacts(form, aiResult, template);
             fillContactFromUser(content, userId);
             content.put("generatedAt", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date()));
+            // 记录 AI 写过的位置，供编辑页的「AI 内容核对」面板使用
+            content.put("aiMeta", buildAiMeta(content, form));
 
             resumeService.saveResume(userId, content);
             saveHistory(userId, request.getUsername(), prompt, aiRaw);
@@ -337,7 +339,50 @@ public class ResumeGenerateController {
         return details;
     }
 
-    /** 用户没填姓名/电话/邮箱时，用注册资料补齐（仍属表单侧数据，不经过大模型） */
+    /**
+     * 生成"待核实清单"：把本次由 AI 写出来的位置记录下来。
+     * 前端编辑页据此展示「AI 内容核对」面板，用户逐条核实后从 pending 里移除。
+     */
+    private Map<String, Object> buildAiMeta(Map<String, Object> content, Map<String, Object> form) {
+        List<String> pending = new ArrayList<>();
+
+        if (!text(content.get("selfEvaluation")).isEmpty()) {
+            pending.add("selfEvaluation");
+        }
+        if (!asStringList(content.get("strengths")).isEmpty()) {
+            pending.add("strengths");
+        }
+        if (!text(asMap(content.get("profession")).get("summary")).isEmpty()) {
+            pending.add("summary");
+        }
+
+        boolean userProvidedProjects = !asList(form.get("projects")).isEmpty();
+        List<Map<String, Object>> projects = asList(content.get("project"));
+        for (int i = 0; i < projects.size(); i++) {
+            if (!text(projects.get(i).get("details")).isEmpty()) {
+                // AI 参考项目整条都是生成内容，描述型只是 details
+                pending.add(userProvidedProjects ? "project." + i + ".details" : "project." + i);
+            }
+        }
+        appendDetailPaths(pending, content.get("internship"), "internship");
+        appendDetailPaths(pending, content.get("work"), "work");
+
+        Map<String, Object> aiMeta = new LinkedHashMap<>();
+        aiMeta.put("pending", pending);
+        aiMeta.put("updatedAt", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date()));
+        return aiMeta;
+    }
+
+    private void appendDetailPaths(List<String> pending, Object entries, String key) {
+        List<Map<String, Object>> list = asList(entries);
+        for (int i = 0; i < list.size(); i++) {
+            if (!text(list.get(i).get("details")).isEmpty()) {
+                pending.add(key + "." + i + ".details");
+            }
+        }
+    }
+
+    /** 补齐用户联系方式：用户没填姓名/电话/邮箱时，用注册资料补齐（仍属表单侧数据，不经过大模型） */
     private void fillContactFromUser(Map<String, Object> content, String userId) {
         try {
             User user = userService.getUser(userId);

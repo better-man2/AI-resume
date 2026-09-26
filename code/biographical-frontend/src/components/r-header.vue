@@ -30,6 +30,15 @@
     推荐职位
     </el-button>
 
+    <el-button
+      v-if="!isAdmin"
+      type="warning"
+      plain
+      @click="clickApplications"
+    >
+    求职进度
+    </el-button>
+
     <el-popconfirm
       confirmButtonText="好的"
       cancelButtonText="不用了"
@@ -69,6 +78,9 @@ export default {
     },
     clickRecommend() {
       this.$router.push('/recommend');
+    },
+    clickApplications() {
+      this.$router.push('/applications');
     },
     handleLogout() {
       localStorage.clear();
